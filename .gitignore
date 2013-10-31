@@ -1,0 +1,7 @@
+.externalToolBuilders/
+.buildpath
+.settings
+.project
+.classpath
+target
+.svn
