@@ -40,15 +40,41 @@ The <action> type attribute can be add,update,fix,remove.
 
 <document>
   <properties>
-    <title>Commons Pool Changes</title>
+    <title>Apache Commons Pool Changes</title>
   </properties>
   <body>
-  <release version="2.0" description=
+  <release version="2.0.1" date="TBD" description=
+"This is a patch release, including bugfixes, test and documentation improvements only.">
+    <action issue="POOL-243" dev="psteitz" type="fix" due-to="Michal Sabo">
+      Added missing create counter decrement in GenericKeyedObjectPool create method on factory
+      exception path. Prior to this fix, exceptions thrown by factory makeObject calls could leak
+      per key capacity.
+    </action>
+    <action issue="POOL-240" dev="psteitz" type="fix" due-to="Dan McNulty">
+      Ensured that blocked threads waiting on a depleted pool get served when
+      objects are destroyed due to validation or passivation failures in
+      returnObject or when a checked out instance is invalidated.
+    </action>
+    <action issue="POOL-241" dev="markt" type="add" due-to="Bruno P. Kinoshita">
+      Expand the coverage of the unit tests.
+    </action>
+    <action dev="markt" type="add">
+      Provide more control over the names under which Pools are registered in
+      JMX so components using the pools can register the pools they use under a
+      related name.
+    </action>
+    <action dev="markt" type="add">
+      Include the number of times an object has been borrowed from the Pool when
+      the DefaultPooledObject wrapper is used.
+    </action>
+  </release>
+  <release version="2.0" date="2013-11-11" description=
 "This is a major new release that provides significant performance improvements
 in high concurrency environments. Pools now provide a mechanism for tracking
 objects that have been borrowed from the pool but not returned. There have been
 numerous API changes to support these and other new features as well as to
-clarify behaviour and improve consistency across the API.">
+clarify behaviour and improve consistency across the API. This release requires
+JDK level 1.6 or above.">
     <action issue="POOL-211" dev="markt" type="add" due-to="Brad Koehn">
       Add support for proxy wrappers to ObjectPool and KeyedObjectPool. The
       primary advantage of these wrappers is that use of pooled objects is
@@ -169,6 +195,23 @@ clarify behaviour and improve consistency across the API.">
       Add support for proxy wrappers for ObjectPool and KeyedObjectPool. The
       primary advantage of using these wrappers is that use of pooled objects
       is prevented after they have been returned to the pool.  
+    </action>
+  </release>
+  <release version="1.6" date="2012-01-07" description="Adds generics and requires Java 5.">
+    <action dev="ggregory" type="add" issue="POOL-208">
+      Support Java 1.5 Generics in version 1.x.
+    </action>
+  </release>
+  <release version="1.5.7" date="2011-12-20" description="This is a patch release, including bugfixes only.">
+    <action dev="psteitz" type="fix" issue="POOL-189" due-to="Bill Speirs">
+      Awaken threads waiting on borrowObject when a pool has been closed and have them throw
+      IllegalStateException.  Prior to the fix for this issue, threads waiting in borrowObject when
+      close was invoked on GOP or GKOP would block indefinitely.
+    </action>
+    <action dev="psteitz" type="fix" issue="POOL-192" due-to="Helge Dannenberg">
+      Corrected total internal processing counter update in destroy.  Prior to the fix
+      for this issue, clear(key) was leaking capacity associated with elements in the
+      pool being cleared.
     </action>
   </release>
   <release version="1.5.6" date="2011-04-03" description="This is a patch release, including bugfixes only.">

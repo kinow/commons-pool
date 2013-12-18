@@ -48,6 +48,7 @@ public class DefaultPooledObject<T> implements PooledObject<T> {
     private volatile boolean logAbandoned = false;
     private volatile Exception borrowedBy = null;
     private volatile Exception usedBy = null;
+    private volatile long borrowedCount = 0;
 
     /**
      * Create a new instance that wraps the provided object so that the pool can
@@ -98,6 +99,14 @@ public class DefaultPooledObject<T> implements PooledObject<T> {
     }
 
     /**
+     * Get the number of times this object has been borrowed.
+     * @return The number of times this object has been borrowed.
+     */
+    public long getBorrowedCount() {
+        return borrowedCount;
+    }
+
+    /**
      * Return an estimate of the last time this object was used.  If the class
      * of the pooled object implements {@link TrackedUse}, what is returned is
      * the maximum of {@link TrackedUse#getLastUsed()} and
@@ -117,8 +126,7 @@ public class DefaultPooledObject<T> implements PooledObject<T> {
 
     @Override
     public int compareTo(PooledObject<T> other) {
-        final long lastActiveDiff =
-                this.getLastReturnTime() - other.getLastReturnTime();
+        final long lastActiveDiff = this.getLastReturnTime() - other.getLastReturnTime();
         if (lastActiveDiff == 0) {
             // Make sure the natural ordering is broadly consistent with equals
             // although this will break down if distinct objects have the same
@@ -180,6 +188,7 @@ public class DefaultPooledObject<T> implements PooledObject<T> {
             state = PooledObjectState.ALLOCATED;
             lastBorrowTime = System.currentTimeMillis();
             lastUseTime = lastBorrowTime;
+            borrowedCount++;
             if (logAbandoned) {
                 borrowedBy = new AbandonedObjectCreatedException();
             }

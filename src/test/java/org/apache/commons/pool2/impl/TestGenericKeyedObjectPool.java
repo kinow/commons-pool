@@ -32,7 +32,14 @@ import java.util.ArrayList;
 import java.util.NoSuchElementException;
 import java.util.Random;
 import java.util.Set;
+import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import javax.management.MBeanServer;
@@ -53,7 +60,7 @@ import org.junit.Before;
 import org.junit.Test;
 
 /**
- * @version $Revision: 1537353 $
+ * @version $Revision: 1550655 $
  */
 public class TestGenericKeyedObjectPool extends TestKeyedObjectPool {
 
@@ -1628,7 +1635,10 @@ public class TestGenericKeyedObjectPool extends TestKeyedObjectPool {
             this.valid = valid;
         }
         @Override
-        public PooledObject<String> makeObject(K key) {
+        public PooledObject<String> makeObject(K key) throws Exception {
+            if (exceptionOnCreate) {
+                throw new Exception();
+            }
             String out = null;
             synchronized(this) {
                 activeCount++;
@@ -1715,6 +1725,7 @@ public class TestGenericKeyedObjectPool extends TestKeyedObjectPool {
         boolean exceptionOnPassivate = false;
         boolean exceptionOnActivate = false;
         boolean exceptionOnDestroy = false;
+        boolean exceptionOnCreate = false;
 
         private void doWait(long latency) {
             try {
@@ -1768,6 +1779,165 @@ public class TestGenericKeyedObjectPool extends TestKeyedObjectPool {
         Assert.assertEquals(1, result.size());
     }
 
+    /**
+     * Verify that threads blocked waiting on a depleted pool get served when a checked out instance
+     * is invalidated.
+     *
+     * JIRA: POOL-240
+     */
+    @Test
+    public void testInvalidateWaiting()
+        throws Exception {
+
+        GenericKeyedObjectPoolConfig config = new GenericKeyedObjectPoolConfig();
+        config.setMaxTotal(2);
+        config.setBlockWhenExhausted(true);
+        config.setMinIdlePerKey(0);
+        config.setMaxWaitMillis(-1);
+        config.setNumTestsPerEvictionRun(Integer.MAX_VALUE); // always test all idle objects
+        config.setTestOnBorrow(true);
+        config.setTestOnReturn(false);
+        config.setTestWhileIdle(true);
+        config.setTimeBetweenEvictionRunsMillis(-1);
+
+        final GenericKeyedObjectPool<Integer, Object> pool =
+                new GenericKeyedObjectPool<Integer, Object>(
+                        new ObjectFactory(), config);
+
+        // Allocate both objects with this thread
+        pool.borrowObject(Integer.valueOf(1)); // object1
+        Object object2 = pool.borrowObject(Integer.valueOf(1));
+
+        // Cause a thread to block waiting for an object
+        ExecutorService executorService =
+                Executors.newSingleThreadExecutor(new DaemonThreadFactory());
+        final Semaphore signal = new Semaphore(0);
+        Future<Exception> result = executorService.submit(new Callable<Exception>() {
+
+            @Override
+            public Exception call() {
+                try {
+                    signal.release();
+                    Object object3 = pool.borrowObject(Integer.valueOf(1));
+                    pool.returnObject(Integer.valueOf(1), object3);
+                    signal.release();
+                } catch (Exception e) {
+                    return e;
+                } catch (Throwable e) {
+                    return new Exception(e);
+                }
+
+                return null;
+            }
+        });
+
+        // Wait for the thread to start
+        assertTrue(signal.tryAcquire(5, TimeUnit.SECONDS));
+
+        // Attempt to ensure that test thread is blocked waiting for an object
+        Thread.sleep(500);
+
+        pool.invalidateObject(Integer.valueOf(1), object2);
+
+        assertTrue("Call to invalidateObject did not unblock pool waiters.",
+                   signal.tryAcquire(2, TimeUnit.SECONDS));
+
+        if (result.get() != null) {
+            throw new AssertionError(result.get());
+        }
+    }
+
+
+    private static class DaemonThreadFactory implements ThreadFactory {
+        @Override
+        public Thread newThread(Runnable r) {
+            Thread t = new Thread(r);
+            t.setDaemon(true);
+            return t;
+        }
+    }
+
+
+    /**
+     * Verify that threads waiting on a depleted pool get served when a checked out object is
+     * invalidated.
+     *
+     * JIRA: POOL-240
+     */
+    @Test
+    public void testInvalidateFreesCapacity()
+        throws Exception {
+        SimpleFactory<String> factory = new SimpleFactory<String>();
+        GenericKeyedObjectPool<String, String> pool = new GenericKeyedObjectPool<String, String>(factory);
+        pool.setMaxTotalPerKey(2);
+        pool.setMaxWaitMillis(500);
+        // Borrow an instance and hold if for 5 seconds
+        WaitingTestThread thread1 = new WaitingTestThread(pool, "one", 5000);
+        thread1.start();
+        // Borrow another instance
+        String obj = pool.borrowObject("one");
+        // Launch another thread - will block, but fail in 500 ms
+        WaitingTestThread thread2 = new WaitingTestThread(pool, "one", 100);
+        thread2.start();
+        // Invalidate the object borrowed by this thread - should allow thread2 to create
+        Thread.sleep(20);
+        pool.invalidateObject("one", obj);
+        Thread.sleep(600); // Wait for thread2 to timeout
+        if (thread2._thrown != null) {
+            fail(thread2._thrown.toString());
+        }
+    }
+
+    /**
+     * Verify that threads waiting on a depleted pool get served when a returning object fails
+     * validation.
+     *
+     * JIRA: POOL-240
+     */
+    @Test
+    public void testValidationFailureOnReturnFreesCapacity()
+        throws Exception {
+        SimpleFactory<String> factory = new SimpleFactory<String>();
+        factory.setValid(false); // Validate will always fail
+        factory.setValidationEnabled(true);
+        GenericKeyedObjectPool<String, String> pool = new GenericKeyedObjectPool<String, String>(factory);
+        pool.setMaxTotalPerKey(2);
+        pool.setMaxWaitMillis(1500);
+        pool.setTestOnReturn(true);
+        pool.setTestOnBorrow(false);
+        // Borrow an instance and hold if for 5 seconds
+        WaitingTestThread thread1 = new WaitingTestThread(pool,"one", 5000);
+        thread1.start();
+        // Borrow another instance and return it after 500 ms (validation will fail)
+        WaitingTestThread thread2 = new WaitingTestThread(pool,"one", 500);
+        thread2.start();
+        Thread.sleep(50);
+        // Try to borrow an object
+        String obj = pool.borrowObject("one");
+        pool.returnObject("one", obj);
+    }
+    
+    /**
+     * Verify that factory exceptions creating objects do not corrupt per key create count.
+     * 
+     * JIRA: POOL-243
+     */
+    @Test
+    public void testMakeObjectException()
+        throws Exception {
+        SimpleFactory<String> factory = new SimpleFactory<String>();
+        GenericKeyedObjectPool<String, String> pool = new GenericKeyedObjectPool<String, String>(factory);
+        pool.setMaxTotalPerKey(1);
+        pool.setBlockWhenExhausted(false);
+        factory.exceptionOnCreate = true;
+        try {
+            pool.borrowObject("One");
+        } catch (Exception ex) {
+            // expected
+        }
+        factory.exceptionOnCreate = false;
+        pool.borrowObject("One");
+    }
 
     private static class DummyFactory
             extends BaseKeyedPooledObjectFactory<Object,Object> {
@@ -1780,7 +1950,6 @@ public class TestGenericKeyedObjectPool extends TestKeyedObjectPool {
             return new DefaultPooledObject<Object>(value);
         }
     }
-
 
     private static class SimplePerKeyFactory
             extends BaseKeyedPooledObjectFactory<Object,Object> {
@@ -1798,6 +1967,21 @@ public class TestGenericKeyedObjectPool extends TestKeyedObjectPool {
             }
             return String.valueOf(key) + String.valueOf(counter);
         }
+        @Override
+        public PooledObject<Object> wrap(Object value) {
+            return new DefaultPooledObject<Object>(value);
+        }
+    }
+
+    private static class ObjectFactory
+        extends BaseKeyedPooledObjectFactory<Integer, Object> {
+
+        @Override
+        public Object create(Integer key)
+            throws Exception {
+            return new Object();
+        }
+
         @Override
         public PooledObject<Object> wrap(Object value) {
             return new DefaultPooledObject<Object>(value);

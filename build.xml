@@ -14,7 +14,8 @@
    See the License for the specific language governing permissions and
    limitations under the License.
 -->
-<!-- $Id: build.xml 1537366 2013-10-31 02:40:26Z billbarker $ -->
+<!-- $Id: build.xml 1549951 2013-12-10 20:06:23Z markt $ -->
+ 
 <project name="commons-pool" default="test" basedir=".">
 
    <target name="init">
@@ -35,12 +36,12 @@
       <!-- command line classpath, if any -->
       <property name="cp" value=""/>
 
-      <!-- now combine the classpaths -->
-      <property name="classpath" value="${cp}"/>
+   	  <!-- now combine the classpaths -->
+   	  <property name="classpath" value="${cp}:${cglib.jar}:${asm.jar}:${asm-util.jar}:${junit.jar}"/>     
 
       <property name="name" value="commons-pool2"/>
       <property name="title" value="Apache Commons Object Pooling Package"/>
-      <property name="version" value="2.0-SNAPSHOT"/>
+      <property name="version" value="2.1-SNAPSHOT"/>
       <property name="package" value="org.apache.commons.pool2.*"/>
 
       <property name="src.dir" value="${basedir}/src"/>

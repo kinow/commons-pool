@@ -70,7 +70,7 @@ import org.apache.commons.pool2.SwallowedExceptionListener;
  * @param <K> The type of keys maintained by this pool.
  * @param <T> Type of element pooled in this pool.
  *
- * @version $Revision: 1537359 $
+ * @version $Revision: 1550655 $
  *
  * @since 2.0
  */
@@ -293,7 +293,7 @@ public class GenericKeyedObjectPool<K,T> extends BaseGenericObjectPool<T>
      * the given key, behavior depends on the {@link #getMaxTotalPerKey()
      * maxTotalPerKey}, {@link #getMaxTotal() maxTotal}, and (if applicable)
      * {@link #getBlockWhenExhausted()} and the value passed in to the
-     * <code>borrowMaxWait</code> parameter. If the number of instances checked
+     * <code>borrowMaxWaitMillis</code> parameter. If the number of instances checked
      * out from the sub-pool under the given key is less than
      * <code>maxTotalPerKey</code> and the total number of instances in
      * circulation (under all keys) is less than <code>maxTotal</code>, a new
@@ -310,9 +310,9 @@ public class GenericKeyedObjectPool<K,T> extends BaseGenericObjectPool<T>
      * passed in to the <code>borrowMaxWait</code> parameter.
      * <p>
      * When <code>maxTotal</code> is set to a positive value and this method is
-     * invoked when at the limit with no idle instances available, an attempt is
-     * made to create room by clearing the oldest 15% of the elements from the
-     * keyed sub-pools.
+     * invoked when at the limit with no idle instances available under the requested
+     * key, an attempt is made to create room by clearing the oldest 15% of the
+     * elements from the keyed sub-pools.
      * <p>
      * When the pool is exhausted, multiple calling threads may be
      * simultaneously blocked waiting for instances to become available. A
@@ -478,6 +478,13 @@ public class GenericKeyedObjectPool<K,T> extends BaseGenericObjectPool<T>
                 } catch (Exception e) {
                     swallowException(e);
                 }
+                if (objectDeque.idleObjects.hasTakeWaiters()) {
+                    try {
+                        addObject(key);
+                    } catch (Exception e) {
+                        swallowException(e);
+                    }
+                }
                 updateStatsReturn(activeTime);
                 return;
             }
@@ -491,6 +498,13 @@ public class GenericKeyedObjectPool<K,T> extends BaseGenericObjectPool<T>
                 destroy(key, p, true);
             } catch (Exception e) {
                 swallowException(e);
+            }
+            if (objectDeque.idleObjects.hasTakeWaiters()) {
+                try {
+                    addObject(key);
+                } catch (Exception e) {
+                    swallowException(e);
+                }
             }
             updateStatsReturn(activeTime);
             return;
@@ -555,6 +569,9 @@ public class GenericKeyedObjectPool<K,T> extends BaseGenericObjectPool<T>
             if (p.getState() != PooledObjectState.INVALID) {
                 destroy(key, p, true);
             }
+        }
+        if (objectDeque.idleObjects.hasTakeWaiters()) {
+            addObject(key);
         }
     }
 
@@ -990,6 +1007,7 @@ public class GenericKeyedObjectPool<K,T> extends BaseGenericObjectPool<T>
             p = factory.makeObject(key);
         } catch (Exception e) {
             numTotal.decrementAndGet();
+            objectDeque.getCreateCount().decrementAndGet();
             throw e;
         }
 

@@ -72,7 +72,7 @@ import org.apache.commons.pool2.UsageTracking;
  *
  * @param <T> Type of element pooled in this pool.
  *
- * @version $Revision: 1537359 $
+ * @version $Revision: 1545920 $
  *
  * @since 2.0
  */
@@ -376,7 +376,7 @@ public class GenericObjectPool<T> extends BaseGenericObjectPool<T>
      * the {@link #getMaxTotal() maxTotal}, (if applicable)
      * {@link #getBlockWhenExhausted()} and the value passed in to the
      * <code>borrowMaxWaitMillis</code> parameter. If the number of instances
-     * checked out from the pool is less than <code>maxActive,</code> a new
+     * checked out from the pool is less than <code>maxTotal,</code> a new
      * instance is created, activated and (if applicable) validated and returned
      * to the caller.
      * <p>
@@ -386,7 +386,7 @@ public class GenericObjectPool<T> extends BaseGenericObjectPool<T>
      * <code>NoSuchElementException</code> (if
      * {@link #getBlockWhenExhausted()} is false). The length of time that this
      * method will block when {@link #getBlockWhenExhausted()} is true is
-     * determined by the value passed in to the <code>borrowMaxWait</code>
+     * determined by the value passed in to the <code>borrowMaxWaitMillis</code>
      * parameter.
      * <p>
      * When the pool is exhausted, multiple calling threads may be
@@ -521,7 +521,7 @@ public class GenericObjectPool<T> extends BaseGenericObjectPool<T>
      * this case, if validation fails, the instance is destroyed.
      * <p>
      * Exceptions encountered destroying objects for any reason are swallowed
-     * but notified via a {@link SwallowedExceptionListener}..
+     * but notified via a {@link SwallowedExceptionListener}.
      *
      * @param obj instance to return to the pool
      */
@@ -560,6 +560,11 @@ public class GenericObjectPool<T> extends BaseGenericObjectPool<T>
                 } catch (Exception e) {
                     swallowException(e);
                 }
+                try {
+                    ensureIdle(1, false);
+                } catch (Exception e) {
+                    swallowException(e);
+                }
                 updateStatsReturn(activeTime);
                 return;
             }
@@ -571,6 +576,11 @@ public class GenericObjectPool<T> extends BaseGenericObjectPool<T>
             swallowException(e1);
             try {
                 destroy(p);
+            } catch (Exception e) {
+                swallowException(e);
+            }
+            try {
+                ensureIdle(1, false);
             } catch (Exception e) {
                 swallowException(e);
             }
@@ -626,6 +636,7 @@ public class GenericObjectPool<T> extends BaseGenericObjectPool<T>
                 destroy(p);
             }
         }
+        ensureIdle(1, false);
     }
 
     /**
@@ -799,11 +810,14 @@ public class GenericObjectPool<T> extends BaseGenericObjectPool<T>
     }
 
     /**
-     * Creates a new wrapped pooled object.
+     * Attempts to create a new wrapped pooled object.
+     * <p>
+     * If there are {@link #getMaxTotal()} objects already in circulation
+     * or in process of being created, this method returns null.
      *
      * @return The new wrapped pooled object
      *
-     * @throws Exception if the creation of the pooled object fails
+     * @throws Exception if the object factory's {@code makeObject} fails
      */
     private PooledObject<T> create() throws Exception {
         int localMaxTotal = getMaxTotal();
@@ -854,12 +868,27 @@ public class GenericObjectPool<T> extends BaseGenericObjectPool<T>
 
     @Override
     void ensureMinIdle() throws Exception {
-        int minIdleSave = getMinIdle();
-        if (minIdleSave < 1) {
+        ensureIdle(getMinIdle(), true);
+    }
+
+    /**
+     * Tries to ensure that {@code idleCount} idle instances exist in the pool.
+     * <p>
+     * Creates and adds idle instances until either {@link #getNumIdle()} reaches {@code idleCount}
+     * or the total number of objects (idle, checked out, or being created) reaches
+     * {@link #getMaxTotal()}. If {@code always} is false, no instances are created unless
+     * there are threads waiting to check out instances from the pool.
+     *
+     * @param idleCount the number of idle instances desired
+     * @param always true means create instances even if the pool has no threads waiting
+     * @throws Exception if the factory's makeObject throws
+     */
+    private void ensureIdle(int idleCount, boolean always) throws Exception {
+        if (idleCount < 1 || isClosed() || (!always && !idleObjects.hasTakeWaiters())) {
             return;
         }
 
-        while (idleObjects.size() < minIdleSave) {
+        while (idleObjects.size() < idleCount) {
             PooledObject<T> p = create();
             if (p == null) {
                 // Can't create objects, no reason to think another call to
@@ -1062,7 +1091,7 @@ public class GenericObjectPool<T> extends BaseGenericObjectPool<T>
      * The combined count of the currently created objects and those in the
      * process of being created. Under load, it may exceed {@link #_maxActive}
      * if multiple threads try and create a new object at the same time but
-     * {@link #create(boolean)} will ensure that there are never more than
+     * {@link #create()} will ensure that there are never more than
      * {@link #_maxActive} objects created at any one time.
      */
     private final AtomicLong createCount = new AtomicLong(0);
